@@ -13,63 +13,55 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SOURCE_FILE = "entry.png";
-const TARGET_FILE = "entry.png";
-const BYTE_LIMIT = 1_000_000;
-const EDGE_LIMIT = 1024;
-const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+// The finished page, rendered in advance by build_frontpage.py.
+const FILE_NAME = "entry.png";
+const MAX_BYTES = 1_000_000;
+const MAX_EDGE = 1024;
+const PNG_SIGNATURE = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const sourcePath = join(scriptDir, SOURCE_FILE);
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR || "/output";
-const targetPath = join(outputDir, TARGET_FILE);
+const here = dirname(fileURLToPath(import.meta.url));
+const source = join(here, FILE_NAME);
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const target = join(outDir, FILE_NAME);
 
-function readHeader32(bytes, offset) {
-  return bytes.readUInt32BE(offset);
+function fail(message) {
+  throw new Error(`entry.png: ${message}`);
 }
 
-function checkPng(bytes) {
-  if (bytes.length < 8) {
-    throw new Error("entry.png is shorter than a PNG signature");
-  }
-  for (let i = 0; i < PNG_MAGIC.length; i++) {
-    if (bytes[i] !== PNG_MAGIC[i]) {
-      throw new Error("entry.png does not start with the PNG signature");
-    }
+function pngDimensions(bytes) {
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    fail("does not start with the PNG signature");
   }
   if (bytes.length < 24) {
-    throw new Error("entry.png is too short to hold an IHDR chunk");
+    fail("too short to hold an IHDR chunk");
   }
-  const firstLength = readHeader32(bytes, 8);
-  const firstKind = bytes.toString("latin1", 12, 16);
-  if (firstLength !== 13 || firstKind !== "IHDR") {
-    throw new Error("entry.png has no 13-byte IHDR first chunk");
+  const firstSize = bytes.readUInt32BE(8);
+  const firstType = bytes.toString("latin1", 12, 16);
+  if (firstSize !== 13 || firstType !== "IHDR") {
+    fail("first chunk is not a 13-byte IHDR");
   }
-  const width = readHeader32(bytes, 16);
-  const height = readHeader32(bytes, 20);
-  if (width > EDGE_LIMIT || height > EDGE_LIMIT) {
-    throw new Error(
-      `entry.png is ${width}x${height}, over the ${EDGE_LIMIT}x${EDGE_LIMIT} limit`,
-    );
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  if (width > MAX_EDGE || height > MAX_EDGE) {
+    fail(`is ${width}x${height}, over the ${MAX_EDGE}x${MAX_EDGE} limit`);
   }
-  if (bytes.length > BYTE_LIMIT) {
-    throw new Error(`entry.png is ${bytes.length} bytes, over the 1 MiB limit`);
+  if (bytes.length > MAX_BYTES) {
+    fail(`is ${bytes.length} bytes, over the 1 MiB limit`);
   }
   return { width, height };
 }
 
 function main() {
-  const bytes = readFileSync(sourcePath);
-  const size = checkPng(bytes);
-  mkdirSync(outputDir, { recursive: true });
-  writeFileSync(targetPath, bytes);
-  const written = readFileSync(targetPath);
-  if (!written.equals(bytes)) {
-    throw new Error("read-back of the written entry.png differs from the source");
+  const bytes = readFileSync(source);
+  const { width, height } = pngDimensions(bytes);
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(target, bytes);
+  if (!readFileSync(target).equals(bytes)) {
+    fail("read-back of the written file differs from the source");
   }
-  console.log(
-    `wrote ${targetPath}: ${size.width}x${size.height} PNG, ${bytes.length} bytes`,
-  );
+  console.log(`wrote ${target}: ${width}x${height} PNG, ${bytes.length} bytes`);
 }
 
 main();
